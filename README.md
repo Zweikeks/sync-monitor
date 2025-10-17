@@ -1,3 +1,5 @@
+# Obsidian plugin sync-monitor
+
 Obsidian plugin that tracks sync activity via vault file events (modify, create, delete).
 This approach assumes that sync operations manifest as file-level events (which is true for
 Obsidian Sync or services like Dropbox).
@@ -17,7 +19,7 @@ The large timeouts in the seconds range here are for manual testing. I am assumi
 must be much smaller in real-world use, keeping a balance between GUI responsiveness and the
 level of protection.
 
-Note:
+## Note:
 This is merely a study to test a conceptual idea. An idea how plugins could handle file access
 with at least some precaution in the Obsidian environment where files are automatically
 synchronized.
@@ -25,22 +27,22 @@ I consider this a workaround to flaws of the environment. Relying on a certain t
 not a good idea. The mechanism mimics the behavior that users exhibit when working in this
 environment.
 
-Build:
+## Build:
 Node.js
 npm install
 npm run build:dev
 
-Install manually:
+## Install manually:
 Create .obsidian/plugins/sync-monitor in your local vault
 Copy main.js and manifest.json to it
 Enable the plugin in the Obsidian settings, community plugins
 
-Test 1:
+## Test 1:
 Modify or create a file, 'Sync: Active' is displayed in the status bar
 Wait the time configured in the plugin settings (5 seconds by default), the status bar reverts to
 'Sync: Idle'
 
-Test 2:
+## Test 2:
 Open the command palette -> run 'Sync Monitor: Wait for Sync: Idle'
 Displays a notice when sync reverts to idle
 or
