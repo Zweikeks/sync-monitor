@@ -22,16 +22,16 @@ npm install<br>
 npm run build:dev
 
 ## Install manually:
-Create .obsidian/plugins/sync-monitor in your local vault<br>
-Copy main.js and manifest.json to it<br>
-Enable the plugin in the Obsidian settings, community plugins
+Create .obsidian/plugins/sync-monitor in your local vault.<br>
+Copy main.js and manifest.json to it.<br>
+Enable the plugin in the Obsidian settings, community plugins.
 
 ## Test 1:
-Modify or create a file, 'Sync: Active' is displayed in the status bar<br>
-Wait the time configured in the plugin settings (5 seconds by default), the status bar reverts to 'Sync: Idle'
+Modify or create a file, 'Sync: Active' is displayed in the status bar.<br>
+Wait the time configured in the plugin settings (5 seconds by default), the status bar reverts to 'Sync: Idle'.
 
 ## Test 2:
-Open the command palette -> run 'Sync Monitor: Wait for Sync: Idle'<br>
-Displays a notice when sync reverts to idle<br>
+Open the command palette -> run 'Sync Monitor: Wait for Sync: Idle'.<br>
+Displays a notice when sync reverts to idle.<br>
 or<br>
 Displays 'Timeout: Sync is still active.' if it didn't revert within the hardcoded timeout of 10 seconds.
