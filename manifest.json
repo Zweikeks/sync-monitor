@@ -1,0 +1,9 @@
+{
+  "id": "sync-monitor",
+  "name": "Sync Monitor",
+  "version": "1.0.0",
+  "main": "main.js",
+  "minAppVersion": "0.12.0",
+  "description": "Tracks sync activity and waits for it to finish.",
+  "author": "Zweikeks"
+}
