@@ -1,21 +1,25 @@
-//Obsidian plugin that tracks sync activity via vault file events (modify, create, delete).
-//This approach assumes that sync operations manifest as file-level events (which is true for
-//Obsidian Sync or services like Dropbox).
-//Displays its internal sync status in the status bar - Sync: Active / Sync: Idle with a countdown
+//Obsidian plugin that tracks synchronization activity via the status of Obsidian's internal
+//synchronization mechanism.
+//Distinguishes local changes (edits by the user) from synchronization-related (external) changes.
+//Displays its own sync status in the status bar - Sync: Active / Sync: Idle with a countdown
 //timer.
-//Adds a test command that waits for sync to revert to idle or times out.
+//Offers the public awaitSyncInactive() that waits for sync to revert to idle or times out.
+//Adds a test command for awaitSyncInactive().
 //
-//Does _not_ distinguish between local changes (user edits) and sync-related (external) changes.
+//(If you prefer to track via the vault file events modify, create, delete, see the older version,
+//which, however, does _not_ distinguish between local and external changes.)
 //
 //How many milliseconds of no file activity must pass before considering the sync to be idle again
 //can be configured in the plugin settings.
+//The 2-second timeout was sufficient on my desktop systems for files up to 5 MB in size - the
+//largest size allowed by Obsidian Sync in the basic plan.
 //
 //The public awaitSyncInactive() can be called from outside before doing operations that could
 //interfere with sync operations. For example to avoid accidentally performing operations on a file
 //while it is currently in a syncing state.
-//The large timeouts in the seconds range here are for manual testing. I am assuming the timeouts
-//must be much smaller in real-world use, keeping a balance between GUI responsiveness and the
-//level of protection.
+//
+//In addition, onExternalSettingsChange() of the Obsidian API should be used to be notified when
+//the settings (data.json) of one's own plugin have changed.
 //
 //Note:
 //This is merely a study to test a conceptual idea. An idea how plugins could handle file access
@@ -36,8 +40,8 @@
 //Enable the plugin in the Obsidian settings, community plugins
 //
 //Test 1:
-//Modify or create a file, 'Sync: Active' is displayed in the status bar
-//Wait the time configured in the plugin settings (5 seconds by default), the status bar reverts to
+//Modify or create a file on another device, 'Sync: Active' is displayed in the status bar
+//Wait the time configured in the plugin settings (2 seconds by default), the status bar reverts to
 //'Sync: Idle'
 //
 //Test 2:
@@ -47,14 +51,16 @@
 //Displays 'Timeout: Sync is still active.' if it didn't revert within the hardcoded timeout of 10
 //seconds.
 
-import { Plugin, TAbstractFile, Notice, StatusBarItem, PluginSettingTab, Setting } from "obsidian";
+import {Plugin, Notice, StatusBarItem, PluginSettingTab, Setting, sanitizeHTMLToDom} from 'obsidian';
+
+const WAIT_FOR_IDLE_TIMEOUT = 10000; //milliseconds
 
 export interface SyncMonitorSettings {
     syncInactivityResetMs: number;
 }
 
 export const DEFAULT_SETTINGS: SyncMonitorSettings = {
-    syncInactivityResetMs: 5000,
+    syncInactivityResetMs: 2000,
 };
 
 export default class SyncMonitorPlugin extends Plugin {
@@ -64,6 +70,8 @@ export default class SyncMonitorPlugin extends Plugin {
     private fileEventHandlers: Array<() => void> = [];
     private syncResetTime: number | null = null;
     private countdownInterval: number | null = null;
+    private sync_instance = this.app.internalPlugins.plugins.sync.instance;
+    private oldSyncStatus = ''
 
     settings: SyncMonitorSettings;
 
@@ -73,22 +81,28 @@ export default class SyncMonitorPlugin extends Plugin {
         this.statusBarItem = this.addStatusBarItem();
         this.updateStatusBar();
 
-        this.registerVaultEvents();
+        this.setSyncActive(); //sync probably runs during Obsidian startup, so we default to active
+
+        this.registerSyncStatusEvent();
         this.addCommands();
 
         this.addSettingTab(new SyncMonitorSettingTab(this.app, this));
     }
 
     onunload() {
-        this.unregisterVaultEvents();
+        this.unregisterSyncStatusEvent();
+
         if (this.syncResetTimeout) {
             clearTimeout(this.syncResetTimeout);
         }
+
         this.stopCountdownInterval();
-        this.statusBarItem.remove();
+        this.statusBarItem?.remove();
     }
 
     private async loadSettings() {
+        //load settings after sync has finished
+        await this.awaitSyncInactive(WAIT_FOR_IDLE_TIMEOUT);
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
 
@@ -96,20 +110,16 @@ export default class SyncMonitorPlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    //register vault file change events
-    private registerVaultEvents() {
-        const handler = (file: TAbstractFile) => this.onFileChanged(file);
-
-        this.fileEventHandlers.push(
-            this.app.vault.on("modify", handler),
-            this.app.vault.on("create", handler),
-            this.app.vault.on("delete", handler)
-        );
+    async onExternalSettingsChange() {
+        await this.loadSettings();
     }
 
-    private unregisterVaultEvents() {
-        this.fileEventHandlers.forEach(off => off());
-        this.fileEventHandlers = [];
+    private registerSyncStatusEvent() {
+        this.sync_instance.on('status-change', this.onSyncStatusChanged.bind(this));
+    }
+
+    private unregisterSyncStatusEvent() {
+        this.sync_instance.off('status-change', this.onSyncStatusChanged.bind(this));
     }
 
     private startCountdownInterval() {
@@ -127,8 +137,8 @@ export default class SyncMonitorPlugin extends Plugin {
         }
     }
 
-    //called on any file activity
-    private onFileChanged(file: TAbstractFile) {
+    //sets syncActive, inits timers
+    private setSyncActive() {
         const wasInactive = !this.syncActive;
         this.syncActive = true;
 
@@ -153,14 +163,34 @@ export default class SyncMonitorPlugin extends Plugin {
         this.updateStatusBar();
     }
 
+    onSyncStatusChanged() {
+        //this.sync_instance.syncStatus exists, even with a local vault, without
+        //any sync service configured, the string is 'Uninitilized' in this case
+        let newSyncStatus = this.sync_instance.syncStatus.toLowerCase();
+
+        //process only if it has actually changed
+        if(newSyncStatus !== this.oldSyncStatus) {
+
+            //downloading versus uploading
+            //deleting    versus deleting remote
+            //renaming is deleting (remote) + down/uploading
+            if(    newSyncStatus.includes('downloading')
+               || (newSyncStatus.includes('deleting') && !newSyncStatus.includes('remote'))) {
+                this.setSyncActive();
+            }
+
+            this.oldSyncStatus = newSyncStatus;
+        }
+    }
+
     //update the status bar text
     private updateStatusBar() {
         if (!this.statusBarItem) return;
 
         if (!this.syncActive) {
-            this.statusBarItem.setText("Sync: Idle");
+            this.statusBarItem.setText('Sync: Idle');
         } else {
-            let countdown = "";
+            let countdown = '';
             if (this.syncResetTime !== null) {
                 const remainingMs = this.syncResetTime - Date.now();
                 const seconds = Math.ceil(remainingMs / 1000);
@@ -183,7 +213,7 @@ export default class SyncMonitorPlugin extends Plugin {
                 if (!this.syncActive) {
                     resolve();
                 } else if (Date.now() - startTime > timeoutMs) {
-                    reject(new Error("Timeout waiting for sync to become inactive."));
+                    reject(new Error('Timeout waiting for sync to become inactive.'));
                 } else {
                     setTimeout(check, interval);
                 }
@@ -196,15 +226,15 @@ export default class SyncMonitorPlugin extends Plugin {
     //test command to manually trigger sync wait
     private addCommands() {
         this.addCommand({
-            id: "test-wait-sync-finish",
-            name: "Wait for Sync: Idle",
+            id: 'test-wait-sync-finish',
+            name: 'Wait for Sync: Idle',
             callback: async () => {
-                new Notice("Waiting for sync to become inactive (timeout: 10s)...");
+                new Notice('Waiting for sync to become inactive (timeout: 10s)...');
                 try {
-                    await this.awaitSyncInactive(10000);
-                    new Notice("Sync is now inactive.");
+                    await this.awaitSyncInactive(WAIT_FOR_IDLE_TIMEOUT);
+                    new Notice('Sync is now inactive.');
                 } catch (err) {
-                    new Notice("Timeout: Sync is still active.");
+                    new Notice('Timeout: Sync is still active.');
                 }
             },
         });
@@ -223,17 +253,23 @@ class SyncMonitorSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl("h2", { text: "Sync Monitor Settings" });
+        containerEl.createEl('h2', { text: 'Sync Monitor Settings' });
+
+        const syncInactivityResetMsDescr: DocumentFragment = sanitizeHTMLToDom(
+              'Milliseconds of inactivity before sync is considered finished.'
+            + '<br>'
+            + `Min. 0, max. ${WAIT_FOR_IDLE_TIMEOUT} milliseconds.` //must be backticks here
+        )
 
         new Setting(containerEl)
-            .setName("Sync inactivity reset timeout")
-            .setDesc("Milliseconds of inactivity before sync is considered finished")
+            .setName('Sync inactivity reset timeout')
+            .setDesc(syncInactivityResetMsDescr)
             .addText(text => text
-                .setPlaceholder("5000")
+                .setPlaceholder('2000')
                 .setValue(this.plugin.settings.syncInactivityResetMs.toString())
                 .onChange(async (value) => {
                     const parsed = parseInt(value);
-                    if (!isNaN(parsed) && parsed > 0) {
+                    if (!isNaN(parsed) && parsed >= 0 && parsed <= WAIT_FOR_IDLE_TIMEOUT) {
                         this.plugin.settings.syncInactivityResetMs = parsed;
                         await this.plugin.saveSettings();
                     }
